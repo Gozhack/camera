@@ -7,29 +7,28 @@ This project is an Android camera implementation engineered for absolute perform
 The current implementation focuses on the critical path of the imaging pipeline:
 - **Direct NDK Camera2 Integration:** Utilizing `camera2/NdkCameraManager.h` for hardware-level control.
 - **Synchronous Resource Management:** Deterministic memory handling via C++17/20 to ensure predictable frame-pacing.
-- **Minimalist Capture Pipeline:** Strictly optimized for:
-  - Sub-millisecond interface initialization.
-  - Zero-copy RAW/YUV buffer acquisition.
-  - Efficient Native Window surface submission for preview.
+- **AImageReader Bridge:** Zero-copy off-screen buffer acquisition utilizing `AHardwareBuffer` to enable concurrent rendering.
+- **Vulkan Graphics Pipeline:** Real-time preview rendering with native YUV sampling and UI overlay capabilities.
 
 ## Performance Mandates
 To maintain the highest possible throughput and lowest latency, the project adheres to the following constraints:
 1. **No JVM on the Hot Path:** Frames are processed and rendered entirely within native threads.
 2. **Memory Locality:** Cache-friendly data structures to minimize bus contention during high-speed sensor readout.
-3. **SIMD Readiness:** Data structures aligned for NEON/ARMv8 instruction sets to enable parallel pixel processing (future-proofing).
+3. **SIMD Readiness:** Data structures aligned for NEON/ARMv8 instruction sets to enable parallel pixel processing.
 4. **Lock-Free Synchronization:** Priority on non-blocking primitives to avoid thread starvation in the rendering loop.
 
 ## Stack & Toolchain
 - **LLVM/Clang:** Optimized toolchain with `-O3` and `-ffast-math` targets.
-- **Android NDK (r25+):** Leveraging the latest stable native APIs.
+- **Android NDK (r30):** Leveraging the latest stable native APIs.
 - **C++20:** For modern, zero-cost abstractions.
-- **Vulkan/OpenGL ES 3.2:** (Inquiry Phase) Targeted for hardware-accelerated zero-copy preview rendering.
+- **Vulkan 1.1:** Core graphics API for zero-copy, hardware-accelerated preview rendering.
 
 ## Roadmap: The Pursuit of Microseconds
-- [ ] **Pure Native UI:** Implement capture controls and interface overlay utilizing OpenGL ES / Vulkan directly on the native surface.
+- [x] **AImageReader Bridge:** Zero-copy off-screen buffer acquisition for camera frames.
+- [ ] **Vulkan Rendering Pipeline:** Real-time display of camera feed utilizing hardware-accelerated YUV-to-RGB conversion.
+- [ ] **Pure Native UI:** Implement capture controls and interface overlay utilizing Vulkan directly on the native surface.
 - [ ] **NEON Optimized Conversions:** Moving YUV to RGB transformations to SIMD.
 - [ ] **Custom Memory Pool:** Pre-allocated buffer queues to eliminate `malloc` calls during capture.
-- [ ] **Vulkan Integration:** Direct-to-GPU memory mapping (DMA-BUF) for zero-latency post-processing.
 
 ## Getting Started: Deploying the Native Engine
 
@@ -58,5 +57,5 @@ Launch the application and monitor the high-performance logs:
 adb shell am start -n com.example.camera/android.app.NativeActivity
 
 # Monitor Logs
-adb logcat -s NativeCamera
+adb logcat -s NativeCamera -s VulkanEngine
 ```
