@@ -41,6 +41,13 @@ android {
             version "3.22.1"
         }
     }
+    
+    sourceSets {
+        main {
+            assets.srcDirs = ['src/main/assets']
+            shaders.srcDirs = ['src/main/shaders']
+        }
+    }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
