@@ -197,8 +197,15 @@ static void onImageAvailable(void* context, AImageReader* reader) {
     media_status_t status = AImageReader_acquireLatestImage(reader, &image);
     
     if (status == AMEDIA_OK && image != nullptr) {
-        // Here we will eventually get the AHardwareBuffer and pass it to Vulkan
-        // For now, just release to keep the queue moving
+        AHardwareBuffer* buffer = nullptr;
+        AImage_getHardwareBuffer(image, &buffer);
+        
+        if (buffer != nullptr) {
+            if (engine->vulkan->updateCameraTexture(buffer)) {
+                engine->vulkan->drawFrame();
+            }
+        }
+        
         AImage_delete(image);
     }
 }
