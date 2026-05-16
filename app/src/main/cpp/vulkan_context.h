@@ -34,6 +34,9 @@ private:
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
     AAssetManager* assetManager = nullptr;
     
+    int32_t width = 0;
+    int32_t height = 0;
+    
     // Rendering resources
     VkRenderPass renderPass = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
@@ -66,6 +69,7 @@ private:
     bool createSwapchain();
     bool createRenderPass();
     bool createDescriptorSetLayout();
+    bool createDescriptorPool();
     bool createGraphicsPipeline();
     bool createFramebuffers();
     bool createCommandPool();
@@ -75,6 +79,7 @@ private:
     void cleanupCameraResources();
     VkShaderModule createShaderModule(const std::vector<char>& code);
     std::vector<char> loadAsset(const char* filename);
+    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 
     // Extension function pointers
     PFN_vkGetAndroidHardwareBufferPropertiesANDROID vkGetAndroidHardwareBufferPropertiesANDROID_ptr = nullptr;
