@@ -6,8 +6,8 @@
 #include <vector>
 #include <android/native_window.h>
 #include <android/log.h>
-
 #include <android/hardware_buffer.h>
+#include <android/asset_manager.h>
 
 #define LOG_TAG "VulkanEngine"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -18,7 +18,7 @@ public:
     VulkanContext() = default;
     ~VulkanContext();
 
-    bool init(ANativeWindow* window);
+    bool init(ANativeWindow* window, AAssetManager* assetManager);
     void cleanup();
     
     // Phase 3: Texture Rendering
@@ -32,11 +32,14 @@ private:
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     VkQueue graphicsQueue = VK_NULL_HANDLE;
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    AAssetManager* assetManager = nullptr;
     
     // Rendering resources
     VkRenderPass renderPass = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline graphicsPipeline = VK_NULL_HANDLE;
+    std::vector<VkImage> swapchainImages;
+    std::vector<VkImageView> swapchainImageViews;
     std::vector<VkFramebuffer> framebuffers;
     VkCommandPool commandPool = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> commandBuffers;
@@ -61,8 +64,6 @@ private:
     bool createDevice();
     bool createSurface(ANativeWindow* window);
     bool createSwapchain();
-    
-    // New setup methods for Phase 3
     bool createRenderPass();
     bool createDescriptorSetLayout();
     bool createGraphicsPipeline();
@@ -72,6 +73,8 @@ private:
     bool createSyncObjects();
     
     void cleanupCameraResources();
+    VkShaderModule createShaderModule(const std::vector<char>& code);
+    std::vector<char> loadAsset(const char* filename);
 
     // Extension function pointers
     PFN_vkGetAndroidHardwareBufferPropertiesANDROID vkGetAndroidHardwareBufferPropertiesANDROID_ptr = nullptr;

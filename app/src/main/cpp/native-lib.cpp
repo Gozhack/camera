@@ -274,7 +274,7 @@ static void onAppCmd(struct android_app* app, int32_t cmd) {
         case APP_CMD_INIT_WINDOW:
             LOGI("APP_CMD_INIT_WINDOW");
             if (app->window != nullptr) {
-                if (engine->vulkan->init(app->window)) {
+                if (engine->vulkan->init(app->window, app->activity->assetManager)) {
                     LOGI("Vulkan Initialized on window creation");
                 }
                 openCamera(engine);
