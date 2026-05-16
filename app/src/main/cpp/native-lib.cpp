@@ -8,7 +8,10 @@
 #include <camera/NdkCameraError.h>
 #include <camera/NdkCameraCaptureSession.h>
 #include <camera/NdkCameraMetadata.h>
+#include <media/NdkImageReader.h>
+#include "vulkan_context.h"
 
+#undef LOG_TAG
 #define LOG_TAG "NativeCamera"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -24,6 +27,9 @@ struct AppEngine {
     ACaptureRequest* captureRequest;
     ACameraCaptureSession* captureSession;
     const char* cameraId;
+    VulkanContext* vulkan;
+    AImageReader* imageReader;
+    ANativeWindow* imageReaderWindow;
 };
 
 static bool checkCameraPermission(struct android_app* app) {
@@ -173,9 +179,27 @@ static void closeCamera(AppEngine* engine) {
         engine->cameraDevice = nullptr;
     }
 
+    if (engine->imageReader != nullptr) {
+        AImageReader_delete(engine->imageReader);
+        engine->imageReader = nullptr;
+        engine->imageReaderWindow = nullptr;
+    }
+
     if (engine->cameraIdList != nullptr) {
         ACameraManager_deleteCameraIdList(engine->cameraIdList);
         engine->cameraIdList = nullptr;
+    }
+}
+
+static void onImageAvailable(void* context, AImageReader* reader) {
+    auto* engine = (AppEngine*)context;
+    AImage* image = nullptr;
+    media_status_t status = AImageReader_acquireLatestImage(reader, &image);
+    
+    if (status == AMEDIA_OK && image != nullptr) {
+        // Here we will eventually get the AHardwareBuffer and pass it to Vulkan
+        // For now, just release to keep the queue moving
+        AImage_delete(image);
     }
 }
 
@@ -185,19 +209,30 @@ static void startPreview(AppEngine* engine) {
         return;
     }
 
-    LOGI("Starting preview initialization...");
+    LOGI("Starting preview initialization with AImageReader...");
 
-    // 1. Prepare outputs
+    // 1. Initialize AImageReader
+    media_status_t mediaStatus = AImageReader_newWithUsage(1920, 1080, AIMAGE_FORMAT_YUV_420_888, 
+                                                          AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE, 
+                                                          3, &engine->imageReader);
+    if (mediaStatus != AMEDIA_OK) {
+        LOGE("Failed to create AImageReader: %d", mediaStatus);
+        return;
+    }
+
+    AImageReader_ImageListener listener = {
+        .context = engine,
+        .onImageAvailable = onImageAvailable,
+    };
+    AImageReader_setImageListener(engine->imageReader, &listener);
+    AImageReader_getWindow(engine->imageReader, &engine->imageReaderWindow);
+
+    // 2. Prepare outputs (using ImageReader window instead of app window)
     ACaptureSessionOutputContainer_create(&engine->outputContainer);
-    ANativeWindow_acquire(engine->app->window);
-    
-    // Set window format to something reliable
-    ANativeWindow_setBuffersGeometry(engine->app->window, 0, 0, WINDOW_FORMAT_RGBA_8888);
-
-    ACaptureSessionOutput_create(engine->app->window, &engine->sessionOutput);
+    ACaptureSessionOutput_create(engine->imageReaderWindow, &engine->sessionOutput);
     ACaptureSessionOutputContainer_add(engine->outputContainer, engine->sessionOutput);
 
-    // 2. Create capture session
+    // 3. Create capture session
     LOGI("Creating capture session...");
     camera_status_t status = ACameraDevice_createCaptureSession(engine->cameraDevice, engine->outputContainer, &sessionCallbacks, &engine->captureSession);
     if (status != ACAMERA_OK) {
@@ -205,7 +240,7 @@ static void startPreview(AppEngine* engine) {
         return;
     }
 
-    // 3. Prepare preview request
+    // 4. Prepare preview request
     LOGI("Creating capture request...");
     status = ACameraDevice_createCaptureRequest(engine->cameraDevice, TEMPLATE_PREVIEW, &engine->captureRequest);
     if (status != ACAMERA_OK) {
@@ -213,16 +248,16 @@ static void startPreview(AppEngine* engine) {
         return;
     }
 
-    ACameraOutputTarget_create(engine->app->window, &engine->outputTarget);
+    ACameraOutputTarget_create(engine->imageReaderWindow, &engine->outputTarget);
     ACaptureRequest_addTarget(engine->captureRequest, engine->outputTarget);
 
-    // 4. Start repeating request
+    // 5. Start repeating request
     LOGI("Setting repeating request...");
     status = ACameraCaptureSession_setRepeatingRequest(engine->captureSession, nullptr, 1, &engine->captureRequest, nullptr);
     if (status != ACAMERA_OK) {
         LOGE("Failed to start repeating request: %d", status);
     } else {
-        LOGI("Preview repeating request set successfully. Preview should start shortly.");
+        LOGI("Preview repeating request set successfully via AImageReader.");
     }
 }
 
@@ -232,6 +267,9 @@ static void onAppCmd(struct android_app* app, int32_t cmd) {
         case APP_CMD_INIT_WINDOW:
             LOGI("APP_CMD_INIT_WINDOW");
             if (app->window != nullptr) {
+                if (engine->vulkan->init(app->window)) {
+                    LOGI("Vulkan Initialized on window creation");
+                }
                 openCamera(engine);
                 startPreview(engine);
             }
@@ -239,6 +277,7 @@ static void onAppCmd(struct android_app* app, int32_t cmd) {
         case APP_CMD_TERM_WINDOW:
             LOGI("APP_CMD_TERM_WINDOW");
             closeCamera(engine);
+            engine->vulkan->cleanup();
             ANativeWindow_release(app->window);
             break;
         case APP_CMD_STOP:
@@ -252,9 +291,11 @@ static void onAppCmd(struct android_app* app, int32_t cmd) {
 void android_main(struct android_app* state) {
     LOGI("Starting NativeActivity Engine...");
 
+    VulkanContext vulkan;
     AppEngine engine = {};
     engine.app = state;
     engine.cameraManager = ACameraManager_create();
+    engine.vulkan = &vulkan;
 
     state->userData = &engine;
     state->onAppCmd = onAppCmd;

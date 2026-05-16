@@ -19,10 +19,15 @@ find_library(
         mediandk-lib
         mediandk)
 
+find_library(
+        vulkan-lib
+        vulkan)
+
 add_library(
         camera_native
         SHARED
         native-lib.cpp
+        vulkan_context.cpp
         ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c)
 
 target_include_directories(camera_native PRIVATE
@@ -33,4 +38,5 @@ target_link_libraries(
         ${log-lib}
         ${android-lib}
         ${camera2ndk-lib}
-        ${mediandk-lib})
+        ${mediandk-lib}
+        ${vulkan-lib})
