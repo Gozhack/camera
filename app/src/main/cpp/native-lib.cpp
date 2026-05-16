@@ -7,6 +7,7 @@
 #include <camera/NdkCameraDevice.h>
 #include <camera/NdkCameraError.h>
 #include <camera/NdkCameraCaptureSession.h>
+#include <camera/NdkCameraMetadata.h>
 
 #define LOG_TAG "NativeCamera"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -24,6 +25,39 @@ struct AppEngine {
     ACameraCaptureSession* captureSession;
     const char* cameraId;
 };
+
+static bool checkCameraPermission(struct android_app* app) {
+    JNIEnv* env;
+    app->activity->vm->AttachCurrentThread(&env, nullptr);
+
+    jclass activityClass = env->GetObjectClass(app->activity->clazz);
+    jmethodID checkMethod = env->GetMethodID(activityClass, "checkSelfPermission", "(Ljava/lang/String;)I");
+    
+    jstring permission = env->NewStringUTF("android.permission.CAMERA");
+    jint result = env->CallIntMethod(app->activity->clazz, checkMethod, permission);
+    
+    env->DeleteLocalRef(permission);
+    env->DeleteLocalRef(activityClass);
+    
+    app->activity->vm->DetachCurrentThread();
+    return result == 0; // PERMISSION_GRANTED
+}
+
+static void requestCameraPermission(struct android_app* app) {
+    JNIEnv* env;
+    app->activity->vm->AttachCurrentThread(&env, nullptr);
+
+    jclass activityClass = env->GetObjectClass(app->activity->clazz);
+    jmethodID requestMethod = env->GetMethodID(activityClass, "requestPermissions", "([Ljava/lang/String;I)V");
+
+    jobjectArray permissions = env->NewObjectArray(1, env->FindClass("java/lang/String"), env->NewStringUTF("android.permission.CAMERA"));
+    env->CallVoidMethod(app->activity->clazz, requestMethod, permissions, 1);
+
+    env->DeleteLocalRef(permissions);
+    env->DeleteLocalRef(activityClass);
+
+    app->activity->vm->DetachCurrentThread();
+}
 
 // Device State Callbacks
 static void onDeviceDisconnected(void* context, ACameraDevice* device) {
@@ -61,16 +95,46 @@ static ACameraCaptureSession_stateCallbacks sessionCallbacks = {
 };
 
 static void openCamera(AppEngine* engine) {
-    camera_status_t status = ACameraManager_getCameraIdList(engine->cameraManager, &engine->cameraIdList);
-    if (status != ACAMERA_OK || engine->cameraIdList->numCameras == 0) {
-        LOGE("Failed to get camera ID list or no cameras found");
+    if (!checkCameraPermission(engine->app)) {
+        LOGI("Camera permission not granted. Requesting...");
+        requestCameraPermission(engine->app);
         return;
     }
 
-    // Use the first camera (usually back-facing)
-    engine->cameraId = engine->cameraIdList->cameraIds[0];
-    LOGI("Opening Camera: %s", engine->cameraId);
+    camera_status_t status = ACameraManager_getCameraIdList(engine->cameraManager, &engine->cameraIdList);
+    if (status != ACAMERA_OK || engine->cameraIdList->numCameras == 0) {
+        LOGE("Failed to get camera ID list (status: %d) or no cameras found", status);
+        return;
+    }
 
+    LOGI("Found %d cameras", engine->cameraIdList->numCameras);
+
+    // Find the first back-facing camera
+    engine->cameraId = nullptr;
+    for (int i = 0; i < engine->cameraIdList->numCameras; ++i) {
+        const char* id = engine->cameraIdList->cameraIds[i];
+        ACameraMetadata* metadata;
+        ACameraManager_getCameraCharacteristics(engine->cameraManager, id, &metadata);
+        
+        uint32_t tag = ACAMERA_LENS_FACING;
+        ACameraMetadata_const_entry entry;
+        ACameraMetadata_getConstEntry(metadata, tag, &entry);
+        
+        auto facing = (acamera_metadata_enum_android_lens_facing_t)entry.data.u8[0];
+        LOGI("Camera ID: %s, Facing: %s", id, (facing == ACAMERA_LENS_FACING_BACK) ? "BACK" : "FRONT");
+
+        if (facing == ACAMERA_LENS_FACING_BACK && engine->cameraId == nullptr) {
+            engine->cameraId = id;
+        }
+        ACameraMetadata_free(metadata);
+    }
+
+    if (engine->cameraId == nullptr) {
+        engine->cameraId = engine->cameraIdList->cameraIds[0];
+        LOGI("No back camera found, using ID: %s", engine->cameraId);
+    }
+
+    LOGI("Opening Camera: %s", engine->cameraId);
     status = ACameraManager_openCamera(engine->cameraManager, engine->cameraId, &deviceCallbacks, &engine->cameraDevice);
     if (status != ACAMERA_OK) {
         LOGE("Failed to open camera: %d", status);
@@ -121,13 +185,20 @@ static void startPreview(AppEngine* engine) {
         return;
     }
 
+    LOGI("Starting preview initialization...");
+
     // 1. Prepare outputs
     ACaptureSessionOutputContainer_create(&engine->outputContainer);
     ANativeWindow_acquire(engine->app->window);
+    
+    // Set window format to something reliable
+    ANativeWindow_setBuffersGeometry(engine->app->window, 0, 0, WINDOW_FORMAT_RGBA_8888);
+
     ACaptureSessionOutput_create(engine->app->window, &engine->sessionOutput);
     ACaptureSessionOutputContainer_add(engine->outputContainer, engine->sessionOutput);
 
     // 2. Create capture session
+    LOGI("Creating capture session...");
     camera_status_t status = ACameraDevice_createCaptureSession(engine->cameraDevice, engine->outputContainer, &sessionCallbacks, &engine->captureSession);
     if (status != ACAMERA_OK) {
         LOGE("Failed to create capture session: %d", status);
@@ -135,6 +206,7 @@ static void startPreview(AppEngine* engine) {
     }
 
     // 3. Prepare preview request
+    LOGI("Creating capture request...");
     status = ACameraDevice_createCaptureRequest(engine->cameraDevice, TEMPLATE_PREVIEW, &engine->captureRequest);
     if (status != ACAMERA_OK) {
         LOGE("Failed to create capture request: %d", status);
@@ -145,11 +217,12 @@ static void startPreview(AppEngine* engine) {
     ACaptureRequest_addTarget(engine->captureRequest, engine->outputTarget);
 
     // 4. Start repeating request
+    LOGI("Setting repeating request...");
     status = ACameraCaptureSession_setRepeatingRequest(engine->captureSession, nullptr, 1, &engine->captureRequest, nullptr);
     if (status != ACAMERA_OK) {
         LOGE("Failed to start repeating request: %d", status);
     } else {
-        LOGI("Preview started successfully");
+        LOGI("Preview repeating request set successfully. Preview should start shortly.");
     }
 }
 

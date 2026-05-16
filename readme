@@ -26,6 +26,7 @@ To maintain the highest possible throughput and lowest latency, the project adhe
 - **Vulkan/OpenGL ES 3.2:** (Inquiry Phase) Targeted for hardware-accelerated zero-copy preview rendering.
 
 ## Roadmap: The Pursuit of Microseconds
+- [ ] **Pure Native UI:** Implement capture controls and interface overlay utilizing OpenGL ES / Vulkan directly on the native surface.
 - [ ] **NEON Optimized Conversions:** Moving YUV to RGB transformations to SIMD.
 - [ ] **Custom Memory Pool:** Pre-allocated buffer queues to eliminate `malloc` calls during capture.
 - [ ] **Vulkan Integration:** Direct-to-GPU memory mapping (DMA-BUF) for zero-latency post-processing.
@@ -33,9 +34,10 @@ To maintain the highest possible throughput and lowest latency, the project adhe
 ## Getting Started: Deploying the Native Engine
 
 ### Build Requirements
-- Android NDK r25+
-- CMake 3.22.1+
-- Android SDK 33+
+- Android NDK r30+ (Configured in `build.gradle`)
+- Android Gradle Plugin 8.5.0
+- Gradle 8.7
+- 16 KB Page Size Alignment Support Included
 
 ### 1. Build the APK
 Execute the following from the project root:
@@ -43,16 +45,11 @@ Execute the following from the project root:
 ./gradlew assembleDebug
 ```
 
-### 2. Install and Grant Permissions
-Since this is a **Pure NativeActivity**, the application does not have a JVM-based UI to request permissions at runtime. You must grant the camera permission manually via ADB after installation:
-
+### 2. Install
 ```bash
-# Install the APK
 adb install app/build/outputs/apk/debug/app-debug.apk
-
-# Grant Camera Permission
-adb shell pm grant com.example.camera android.permission.CAMERA
 ```
+*Note: The application includes a JNI-based runtime permission request, so you no longer need to grant camera access manually via ADB.*
 
 ### 3. Run and Monitor
 Launch the application and monitor the high-performance logs:

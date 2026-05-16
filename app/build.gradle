@@ -6,6 +6,7 @@ plugins {
 android {
     namespace 'com.example.camera'
     compileSdk 33
+    ndkVersion "30.0.14904198"
 
     defaultConfig {
         applicationId "com.example.camera"
@@ -17,8 +18,14 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags "-std=c++20"
-                arguments "-DANDROID_STL=c++_shared"
+                arguments "-DANDROID_STL=c++_shared", "-DANDROID_ALIGNED_NDK_LIBS=TRUE"
             }
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
         }
     }
 
