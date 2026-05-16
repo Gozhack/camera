@@ -1,0 +1,29 @@
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Gradle
+.gradle/
+build/
+app/build/
+.artifacts/
+
+# Local configuration (Security/Privacy)
+local.properties
+
+# Log files
+*.log
+
+# Native build artifacts
+.externalNativeBuild/
+.cxx/
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Project context
+GEMINI.md
