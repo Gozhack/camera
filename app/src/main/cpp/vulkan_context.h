@@ -8,6 +8,7 @@
 #include <android/log.h>
 #include <android/hardware_buffer.h>
 #include <android/asset_manager.h>
+#include <unordered_map>
 
 #define LOG_TAG "VulkanEngine"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -26,6 +27,15 @@ public:
     void drawFrame();
 
 private:
+    // Resource cache for AHardwareBuffers to avoid expensive re-imports
+    struct BufferResource {
+        VkImage image;
+        VkDeviceMemory memory;
+        VkImageView view;
+        VkDescriptorSet descriptorSet;
+    };
+    std::unordered_map<AHardwareBuffer*, BufferResource> bufferCache;
+
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
@@ -61,6 +71,9 @@ private:
     VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
     VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE;
     VkFence inFlightFence = VK_NULL_HANDLE;
+
+    void cleanupSwapchain();
+    void recreateSwapchain();
 
     bool createInstance();
     bool selectPhysicalDevice();

@@ -9,6 +9,7 @@
 #include <camera/NdkCameraCaptureSession.h>
 #include <camera/NdkCameraMetadata.h>
 #include <media/NdkImageReader.h>
+#include <atomic>
 #include "vulkan_context.h"
 
 #undef LOG_TAG
@@ -19,6 +20,7 @@
 
 struct AppEngine {
     struct android_app* app;
+    std::atomic<bool> isRendering{false};
     ACameraManager* cameraManager;
     ACameraIdList* cameraIdList;
     ACameraDevice* cameraDevice;
@@ -150,18 +152,21 @@ static void closeCamera(AppEngine* engine) {
 
 static void onImageAvailable(void* context, AImageReader* reader) {
     auto* engine = (AppEngine*)context;
+    engine->isRendering.store(true, std::memory_order_release);
     AImage* image = nullptr;
     // Use acquireLatestImage and process in a loop if multiple available
     while (AImageReader_acquireLatestImage(reader, &image) == AMEDIA_OK && image != nullptr) {
         AHardwareBuffer* buffer = nullptr;
         AImage_getHardwareBuffer(image, &buffer);
         if (buffer != nullptr) {
+            AHardwareBuffer_acquire(buffer); // Keep the buffer alive for Vulkan
             if (engine->vulkan->updateCameraTexture(buffer)) {
                 engine->vulkan->drawFrame();
             }
         }
         AImage_delete(image);
     }
+    engine->isRendering.store(false, std::memory_order_release);
 }
 
 static void startPreview(AppEngine* engine) {
@@ -193,6 +198,9 @@ static void onAppCmd(struct android_app* app, int32_t cmd) {
             }
             break;
         case APP_CMD_TERM_WINDOW:
+            while (engine->isRendering.load(std::memory_order_acquire)) {
+                // Spin-wait until rendering is complete
+            }
             closeCamera(engine);
             engine->vulkan->cleanup();
             ANativeWindow_release(app->window);
