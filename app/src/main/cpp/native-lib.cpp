@@ -208,6 +208,20 @@ static void onAppCmd(struct android_app* app, int32_t cmd) {
     }
 }
 
+static int32_t onInputEvent(struct android_app* app, AInputEvent* event) {
+    if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION) {
+        int32_t action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
+        if (action == AMOTION_EVENT_ACTION_DOWN) {
+            float x = AMotionEvent_getX(event, 0);
+            float y = AMotionEvent_getY(event, 0);
+            LOGI("Touch detected at: %.2f, %.2f", x, y);
+            // Intersection logic with UI button will go here
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void android_main(struct android_app* state) {
     VulkanContext vulkan;
     AppEngine engine = {};
@@ -216,6 +230,7 @@ void android_main(struct android_app* state) {
     engine.vulkan = &vulkan;
     state->userData = &engine;
     state->onAppCmd = onAppCmd;
+    state->onInputEvent = onInputEvent;
 
     while (true) {
         int ident; int events; struct android_poll_source* source;

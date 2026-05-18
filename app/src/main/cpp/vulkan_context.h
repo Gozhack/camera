@@ -72,6 +72,12 @@ private:
     VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE;
     VkFence inFlightFence = VK_NULL_HANDLE;
 
+    // UI resources
+    VkPipeline uiPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout uiPipelineLayout = VK_NULL_HANDLE;
+    VkBuffer uiVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory uiVertexMemory = VK_NULL_HANDLE;
+
     void cleanupSwapchain();
     void recreateSwapchain();
 
@@ -84,6 +90,7 @@ private:
     bool createDescriptorSetLayout();
     bool createDescriptorPool();
     bool createGraphicsPipeline();
+    bool createUIPipeline();
     bool createFramebuffers();
     bool createCommandPool();
     bool createCommandBuffers();

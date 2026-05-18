@@ -16,6 +16,7 @@ This project is an Android camera implementation engineered for absolute perform
 ### Phase 3: High-Speed Vulkan Rendering (Complete)
 - **Hardware YUV Sampling:** Utilizing `VK_KHR_sampler_ycbcr_conversion` for automatic, zero-overhead color space transformation.
 - **Resource Caching:** Smart buffer management that eliminates per-frame Vulkan object creation, achieving true 60+ FPS preview.
+- **Stability Core:** Robust thread synchronization (atomic-guarded) and explicit hardware buffer management for crash-free operation.
 - **16 KB Page Alignment:** Full compatibility with Android 15+ devices and modern hardware architectures.
 
 ## Performance Mandates

@@ -23,6 +23,7 @@ bool VulkanContext::init(ANativeWindow* window, AAssetManager* am) {
     if (!createDescriptorPool()) return false;
     if (!createCommandPool()) return false;
     if (!createSyncObjects()) return false;
+    if (!createUIPipeline()) return false;
     
     return true;
 }
@@ -52,6 +53,11 @@ void VulkanContext::cleanup() {
     
     cleanupCameraResources();
     cleanupSwapchain();
+
+    if (uiPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, uiPipeline, nullptr);
+    if (uiPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, uiPipelineLayout, nullptr);
+    if (uiVertexBuffer != VK_NULL_HANDLE) vkDestroyBuffer(device, uiVertexBuffer, nullptr);
+    if (uiVertexMemory != VK_NULL_HANDLE) vkFreeMemory(device, uiVertexMemory, nullptr);
 
     if (graphicsPipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, graphicsPipeline, nullptr);
     if (pipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -145,7 +151,10 @@ bool VulkanContext::createDescriptorPool() {
 
 std::vector<char> VulkanContext::loadAsset(const char* filename) {
     AAsset* asset = AAssetManager_open(assetManager, filename, AASSET_MODE_BUFFER);
-    if (!asset) return {};
+    if (!asset) {
+        LOGE("Failed to open asset: %s", filename);
+        return {};
+    }
     size_t size = AAsset_getLength(asset);
     std::vector<char> buffer(size);
     AAsset_read(asset, buffer.data(), size);
@@ -154,6 +163,7 @@ std::vector<char> VulkanContext::loadAsset(const char* filename) {
 }
 
 VkShaderModule VulkanContext::createShaderModule(const std::vector<char>& code) {
+    if (code.empty()) return VK_NULL_HANDLE;
     VkShaderModuleCreateInfo smInfo = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, nullptr, 0, code.size(), (uint32_t*)code.data()};
     VkShaderModule mod; vkCreateShaderModule(device, &smInfo, nullptr, &mod); return mod;
 }
@@ -169,6 +179,8 @@ bool VulkanContext::createGraphicsPipeline() {
     auto fragCode = loadAsset("shaders/camera.frag.spv");
     VkShaderModule vertMod = createShaderModule(vertCode);
     VkShaderModule fragMod = createShaderModule(fragCode);
+    if (vertMod == VK_NULL_HANDLE || fragMod == VK_NULL_HANDLE) return false;
+
     VkPipelineShaderStageCreateInfo stages[] = {
         {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertMod, "main"},
         {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fragMod, "main"}
@@ -187,6 +199,72 @@ bool VulkanContext::createGraphicsPipeline() {
     VkGraphicsPipelineCreateInfo pInfo = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, nullptr, 0, 2, stages, &vInput, &iAssembly, nullptr, &vpState, &rast, &multi, nullptr, &cb, nullptr, pipelineLayout, renderPass, 0};
     vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pInfo, nullptr, &graphicsPipeline);
     vkDestroyShaderModule(device, vertMod, nullptr); vkDestroyShaderModule(device, fragMod, nullptr);
+    return true;
+}
+
+bool VulkanContext::createUIPipeline() {
+    LOGI("Creating UI Pipeline...");
+    auto vertCode = loadAsset("shaders/ui.vert.spv");
+    auto fragCode = loadAsset("shaders/ui.frag.spv");
+    VkShaderModule vertMod = createShaderModule(vertCode);
+    VkShaderModule fragMod = createShaderModule(fragCode);
+    if (vertMod == VK_NULL_HANDLE || fragMod == VK_NULL_HANDLE) {
+        LOGE("Failed to create UI shader modules");
+        return false;
+    }
+    LOGI("UI shaders loaded");
+
+    VkPipelineShaderStageCreateInfo stages[] = {
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertMod, "main"},
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fragMod, "main"}
+    };
+
+    VkVertexInputBindingDescription bindingDesc = {0, sizeof(float) * 2, VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrDesc = {0, 0, VK_FORMAT_R32G32_SFLOAT, 0};
+    VkPipelineVertexInputStateCreateInfo vInput = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO, nullptr, 0, 1, &bindingDesc, 1, &attrDesc};
+    
+    VkPipelineInputAssemblyStateCreateInfo iAssembly = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, nullptr, 0, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN, VK_FALSE};
+    VkViewport vp = {0.0f, 0.0f, (float)width, (float)height, 0.0f, 1.0f};
+    VkRect2D sc = {{0, 0}, {(uint32_t)width, (uint32_t)height}};
+    VkPipelineViewportStateCreateInfo vpState = {VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, nullptr, 0, 1, &vp, 1, &sc};
+    VkPipelineRasterizationStateCreateInfo rast = {VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, nullptr, 0, VK_FALSE, VK_FALSE, VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE};
+    VkPipelineMultisampleStateCreateInfo multi = {VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, nullptr, 0, VK_SAMPLE_COUNT_1_BIT};
+    
+    VkPipelineColorBlendAttachmentState cbAtt = {VK_TRUE, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, 0xF};
+    VkPipelineColorBlendStateCreateInfo cb = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, nullptr, 0, VK_FALSE, VK_LOGIC_OP_COPY, 1, &cbAtt};
+    
+    VkPipelineLayoutCreateInfo lInfo = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, nullptr, 0, 0, nullptr, 0, nullptr};
+    vkCreatePipelineLayout(device, &lInfo, nullptr, &uiPipelineLayout);
+    
+    VkGraphicsPipelineCreateInfo pInfo = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, nullptr, 0, 2, stages, &vInput, &iAssembly, nullptr, &vpState, &rast, &multi, nullptr, &cb, nullptr, uiPipelineLayout, renderPass, 0};
+    vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pInfo, nullptr, &uiPipeline);
+    
+    vkDestroyShaderModule(device, vertMod, nullptr); vkDestroyShaderModule(device, fragMod, nullptr);
+    LOGI("UI pipeline created");
+
+    // Create a circular button at the bottom center
+    std::vector<float> vertices;
+    float centerX = 0.0f; float centerY = 0.8f;
+    float radiusX = 0.15f; float radiusY = 0.15f * (float)width / (float)height;
+    for (int i = 0; i <= 32; i++) {
+        float angle = (float)i * 2.0f * 3.14159f / 32.0f;
+        vertices.push_back(centerX + cosf(angle) * radiusX);
+        vertices.push_back(centerY + sinf(angle) * radiusY);
+    }
+
+    VkBufferCreateInfo bInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, nullptr, 0, vertices.size() * sizeof(float), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_SHARING_MODE_EXCLUSIVE};
+    vkCreateBuffer(device, &bInfo, nullptr, &uiVertexBuffer);
+    
+    VkMemoryRequirements memReq; vkGetBufferMemoryRequirements(device, uiVertexBuffer, &memReq);
+    VkMemoryAllocateInfo allocInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, memReq.size, findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)};
+    vkAllocateMemory(device, &allocInfo, nullptr, &uiVertexMemory);
+    vkBindBufferMemory(device, uiVertexBuffer, uiVertexMemory, 0);
+
+    void* data; vkMapMemory(device, uiVertexMemory, 0, vertices.size() * sizeof(float), 0, &data);
+    memcpy(data, vertices.data(), vertices.size() * sizeof(float));
+    vkUnmapMemory(device, uiVertexMemory);
+    LOGI("UI vertex buffer ready");
+
     return true;
 }
 
@@ -317,9 +395,20 @@ void VulkanContext::drawFrame() {
     VkClearValue clear = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
     VkRenderPassBeginInfo rpB = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, nullptr, renderPass, framebuffers[idx], {{0, 0}, {(uint32_t)width, (uint32_t)height}}, 1, &clear};
     vkCmdBeginRenderPass(commandBuffers[idx], &rpB, VK_SUBPASS_CONTENTS_INLINE);
+    
+    // Draw Camera Preview
     vkCmdBindPipeline(commandBuffers[idx], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
     vkCmdBindDescriptorSets(commandBuffers[idx], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
     vkCmdDraw(commandBuffers[idx], 3, 1, 0, 0);
+
+    // Draw UI (Capture Button)
+    if (uiPipeline != VK_NULL_HANDLE) {
+        vkCmdBindPipeline(commandBuffers[idx], VK_PIPELINE_BIND_POINT_GRAPHICS, uiPipeline);
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(commandBuffers[idx], 0, 1, &uiVertexBuffer, &offset);
+        vkCmdDraw(commandBuffers[idx], 33, 1, 0, 0);
+    }
+
     vkCmdEndRenderPass(commandBuffers[idx]); vkEndCommandBuffer(commandBuffers[idx]);
     
     VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
