@@ -392,14 +392,24 @@ void VulkanContext::drawFrame() {
 
     vkResetCommandBuffer(commandBuffers[idx], 0);
     VkCommandBufferBeginInfo bInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; vkBeginCommandBuffer(commandBuffers[idx], &bInfo);
+    
+    // Performance-optimized flash: Toggle clear color based on atomic flag
+    bool isFlashing = flashFrames.load() > 0;
     VkClearValue clear = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
+    if (isFlashing) {
+        clear = {{{1.0f, 1.0f, 1.0f, 1.0f}}};
+        flashFrames.fetch_sub(1);
+    }
+
     VkRenderPassBeginInfo rpB = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, nullptr, renderPass, framebuffers[idx], {{0, 0}, {(uint32_t)width, (uint32_t)height}}, 1, &clear};
     vkCmdBeginRenderPass(commandBuffers[idx], &rpB, VK_SUBPASS_CONTENTS_INLINE);
     
-    // Draw Camera Preview
-    vkCmdBindPipeline(commandBuffers[idx], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-    vkCmdBindDescriptorSets(commandBuffers[idx], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
-    vkCmdDraw(commandBuffers[idx], 3, 1, 0, 0);
+    // Draw Camera Preview (skip if flashing to allow white clear color to show)
+    if (!isFlashing) {
+        vkCmdBindPipeline(commandBuffers[idx], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        vkCmdBindDescriptorSets(commandBuffers[idx], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
+        vkCmdDraw(commandBuffers[idx], 3, 1, 0, 0);
+    }
 
     // Draw UI (Capture Button)
     if (uiPipeline != VK_NULL_HANDLE) {

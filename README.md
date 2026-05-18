@@ -19,6 +19,16 @@ This project is an Android camera implementation engineered for absolute perform
 - **Stability Core:** Robust thread synchronization (atomic-guarded) and explicit hardware buffer management for crash-free operation.
 - **16 KB Page Alignment:** Full compatibility with Android 15+ devices and modern hardware architectures.
 
+### Phase 4: Pure Native UI (Complete)
+- **Zero-JVM Input Handling:** Processing `AInputEvent` directly via `android_native_app_glue`.
+- **Orthographic UI Overlay:** A secondary Vulkan pipeline with alpha blending for rendering interactive controls over the live preview.
+- **Low-Latency Feedback:** Optimized "Zero-Cost Flash" effect using clear-color toggling for immediate shutter feedback.
+
+### Phase 5: High-Resolution Capture (Complete)
+- **Dual-Output Pipeline:** Simultaneous management of 1080p YUV preview and max-resolution (e.g., 12.5MP) JPEG capture streams.
+- **Asynchronous I/O:** JPEG encoding via hardware ISP and background disk writing on detached threads to prevent preview stutter.
+- **Direct Filesystem Access:** Saving images to app-private external storage without JNI overhead.
+
 ## Performance Mandates
 1. **No JVM on the Hot Path:** Processing and rendering occur entirely within native threads.
 2. **Deterministic Pacing:** Lock-free synchronization between Camera and Vulkan stages.
@@ -32,9 +42,15 @@ This project is an Android camera implementation engineered for absolute perform
 
 ## Roadmap
 - [x] **AImageReader Bridge:** Zero-copy off-screen buffer acquisition.
-- [x] **Vulkan Rendering Pipeline:** Real-time hardware-accelerated preview (Phase 3 Milestone).
-- [ ] **Phase 4: Pure Native UI:** Implement capture controls and interface overlay utilizing Vulkan shaders and native touch input.
-- [ ] **Phase 5: High-Res Capture:** Implementation of single-shot high-resolution YUV/RAW acquisition.
+- [x] **Vulkan Rendering Pipeline:** Real-time hardware-accelerated preview.
+- [x] **Pure Native UI:** Integrated capture controls and feedback.
+- [x] **High-Res Capture:** Single-shot high-resolution JPEG acquisition.
+
+## Next Steps
+- **Manual Controls:** Implement Native UI for ISO, Exposure Time, and Manual Focus.
+- **Media Scanner Integration:** Trigger a broadcast to make saved images visible in the Android Gallery.
+- **RAW/DNG Support:** Extend capture pipeline to support uncompressed Bayer RAW data.
+- **Advanced UI:** Implement a native Vulkan-based gallery viewer.
 
 ## Getting Started
 

@@ -10,6 +10,9 @@
 #include <camera/NdkCameraMetadata.h>
 #include <media/NdkImageReader.h>
 #include <atomic>
+#include <thread>
+#include <fstream>
+#include <chrono>
 #include "vulkan_context.h"
 
 #undef LOG_TAG
@@ -24,11 +27,28 @@ struct AppEngine {
     ACameraManager* cameraManager;
     ACameraIdList* cameraIdList;
     ACameraDevice* cameraDevice;
+    
+    // Screen info
+    int32_t screenWidth;
+    int32_t screenHeight;
+    
+    // Preview resources
     ACaptureSessionOutputContainer* outputContainer;
     ACaptureSessionOutput* sessionOutput;
     ACameraOutputTarget* outputTarget;
     ACaptureRequest* captureRequest;
     ACameraCaptureSession* captureSession;
+    
+    // Still capture resources
+    AImageReader* captureReader;
+    ANativeWindow* captureWindow;
+    ACaptureSessionOutput* captureSessionOutput;
+    ACameraOutputTarget* captureOutputTarget;
+    ACaptureRequest* stillCaptureRequest;
+    AImageReader_ImageListener captureListener;
+    int32_t captureWidth;
+    int32_t captureHeight;
+
     const char* cameraId;
     VulkanContext* vulkan;
     AImageReader* imageReader;
@@ -106,11 +126,31 @@ static void openCamera(AppEngine* engine) {
         const char* id = engine->cameraIdList->cameraIds[i];
         ACameraMetadata* metadata;
         ACameraManager_getCameraCharacteristics(engine->cameraManager, id, &metadata);
-        uint32_t tag = ACAMERA_LENS_FACING;
+        
         ACameraMetadata_const_entry entry;
-        ACameraMetadata_getConstEntry(metadata, tag, &entry);
+        ACameraMetadata_getConstEntry(metadata, ACAMERA_LENS_FACING, &entry);
         auto facing = (acamera_metadata_enum_android_lens_facing_t)entry.data.u8[0];
-        if (facing == ACAMERA_LENS_FACING_BACK && engine->cameraId == nullptr) engine->cameraId = id;
+        
+        if (facing == ACAMERA_LENS_FACING_BACK && engine->cameraId == nullptr) {
+            engine->cameraId = id;
+            
+            // Find max JPEG resolution
+            ACameraMetadata_getConstEntry(metadata, ACAMERA_SCALER_AVAILABLE_STREAM_CONFIGURATIONS, &entry);
+            for (uint32_t j = 0; j < entry.count; j += 4) {
+                int32_t format = entry.data.i32[j];
+                int32_t width = entry.data.i32[j+1];
+                int32_t height = entry.data.i32[j+2];
+                int32_t input = entry.data.i32[j+3]; // 0 = output, 1 = input
+                
+                if (input == 0 && format == AIMAGE_FORMAT_JPEG) {
+                    if (width * height > engine->captureWidth * engine->captureHeight) {
+                        engine->captureWidth = width;
+                        engine->captureHeight = height;
+                    }
+                }
+            }
+            LOGI("Max JPEG Resolution: %dx%d", engine->captureWidth, engine->captureHeight);
+        }
         ACameraMetadata_free(metadata);
     }
     if (engine->cameraId == nullptr) engine->cameraId = engine->cameraIdList->cameraIds[0];
@@ -127,13 +167,25 @@ static void closeCamera(AppEngine* engine) {
         ACaptureRequest_free(engine->captureRequest);
         engine->captureRequest = nullptr;
     }
+    if (engine->stillCaptureRequest != nullptr) {
+        ACaptureRequest_free(engine->stillCaptureRequest);
+        engine->stillCaptureRequest = nullptr;
+    }
     if (engine->outputTarget != nullptr) {
         ACameraOutputTarget_free(engine->outputTarget);
         engine->outputTarget = nullptr;
     }
+    if (engine->captureOutputTarget != nullptr) {
+        ACameraOutputTarget_free(engine->captureOutputTarget);
+        engine->captureOutputTarget = nullptr;
+    }
     if (engine->sessionOutput != nullptr) {
         ACaptureSessionOutput_free(engine->sessionOutput);
         engine->sessionOutput = nullptr;
+    }
+    if (engine->captureSessionOutput != nullptr) {
+        ACaptureSessionOutput_free(engine->captureSessionOutput);
+        engine->captureSessionOutput = nullptr;
     }
     if (engine->outputContainer != nullptr) {
         ACaptureSessionOutputContainer_free(engine->outputContainer);
@@ -147,6 +199,11 @@ static void closeCamera(AppEngine* engine) {
         AImageReader_delete(engine->imageReader);
         engine->imageReader = nullptr;
         engine->imageReaderWindow = nullptr;
+    }
+    if (engine->captureReader != nullptr) {
+        AImageReader_delete(engine->captureReader);
+        engine->captureReader = nullptr;
+        engine->captureWindow = nullptr;
     }
 }
 
@@ -169,22 +226,89 @@ static void onImageAvailable(void* context, AImageReader* reader) {
     engine->isRendering.store(false, std::memory_order_release);
 }
 
+static void saveImageAsync(std::vector<uint8_t> data, std::string path) {
+    std::ofstream file(path, std::ios::binary);
+    if (file.is_open()) {
+        file.write((char*)data.data(), data.size());
+        file.close();
+        LOGI("Image saved to: %s (%zu bytes)", path.c_str(), data.size());
+    } else {
+        LOGE("Failed to save image to: %s", path.c_str());
+    }
+}
+
+static void onCaptureImageAvailable(void* context, AImageReader* reader) {
+    LOGI("onCaptureImageAvailable triggered");
+    auto* engine = (AppEngine*)context;
+    AImage* image = nullptr;
+    if (AImageReader_acquireLatestImage(reader, &image) == AMEDIA_OK && image != nullptr) {
+        int32_t len = 0; uint8_t* data = nullptr;
+        AImage_getPlaneData(image, 0, &data, &len);
+        if (data != nullptr && len > 0) {
+            std::vector<uint8_t> buffer(data, data + len);
+            
+            // Generate filename with timestamp
+            auto now = std::chrono::system_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+            std::string path = std::string(engine->app->activity->externalDataPath) + "/IMG_" + std::to_string(ms) + ".jpg";
+            
+            // Free HAL buffer immediately
+            AImage_delete(image);
+            
+            // Offload disk I/O to detached thread
+            std::thread(saveImageAsync, std::move(buffer), std::move(path)).detach();
+        } else {
+            AImage_delete(image);
+        }
+    }
+}
+
 static void startPreview(AppEngine* engine) {
     if (engine->cameraDevice == nullptr || engine->app->window == nullptr) return;
+    
+    // 1. Create Preview ImageReader (1080p YUV)
     media_status_t mStatus = AImageReader_newWithUsage(1920, 1080, AIMAGE_FORMAT_YUV_420_888, AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE, 3, &engine->imageReader);
     if (mStatus != AMEDIA_OK) return;
     engine->imageListener = { .context = engine, .onImageAvailable = onImageAvailable };
     AImageReader_setImageListener(engine->imageReader, &engine->imageListener);
     AImageReader_getWindow(engine->imageReader, &engine->imageReaderWindow);
 
+    // 2. Create Capture ImageReader (Max JPEG)
+    mStatus = AImageReader_newWithUsage(engine->captureWidth, engine->captureHeight, AIMAGE_FORMAT_JPEG, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, 2, &engine->captureReader);
+    if (mStatus != AMEDIA_OK) return;
+    engine->captureListener = { .context = engine, .onImageAvailable = onCaptureImageAvailable };
+    AImageReader_setImageListener(engine->captureReader, &engine->captureListener);
+    AImageReader_getWindow(engine->captureReader, &engine->captureWindow);
+
+    // 3. Configure Session with both outputs
     ACaptureSessionOutputContainer_create(&engine->outputContainer);
+    
     ACaptureSessionOutput_create(engine->imageReaderWindow, &engine->sessionOutput);
     ACaptureSessionOutputContainer_add(engine->outputContainer, engine->sessionOutput);
+    
+    ACaptureSessionOutput_create(engine->captureWindow, &engine->captureSessionOutput);
+    ACaptureSessionOutputContainer_add(engine->outputContainer, engine->captureSessionOutput);
+    
     ACameraDevice_createCaptureSession(engine->cameraDevice, engine->outputContainer, &sessionCallbacks, &engine->captureSession);
+
+    // 4. Prepare Preview Request
     ACameraDevice_createCaptureRequest(engine->cameraDevice, TEMPLATE_PREVIEW, &engine->captureRequest);
     ACameraOutputTarget_create(engine->imageReaderWindow, &engine->outputTarget);
     ACaptureRequest_addTarget(engine->captureRequest, engine->outputTarget);
     ACameraCaptureSession_setRepeatingRequest(engine->captureSession, nullptr, 1, &engine->captureRequest, nullptr);
+    
+    // 5. Prepare Still Capture Request
+    ACameraDevice_createCaptureRequest(engine->cameraDevice, TEMPLATE_STILL_CAPTURE, &engine->stillCaptureRequest);
+    ACameraOutputTarget_create(engine->captureWindow, &engine->captureOutputTarget);
+    ACaptureRequest_addTarget(engine->stillCaptureRequest, engine->captureOutputTarget);
+}
+
+static void takePicture(AppEngine* engine) {
+    if (engine->captureSession != nullptr && engine->stillCaptureRequest != nullptr) {
+        LOGI("Triggering high-res capture...");
+        engine->vulkan->triggerFlash();
+        ACameraCaptureSession_capture(engine->captureSession, nullptr, 1, &engine->stillCaptureRequest, nullptr);
+    }
 }
 
 static void onAppCmd(struct android_app* app, int32_t cmd) {
@@ -192,6 +316,8 @@ static void onAppCmd(struct android_app* app, int32_t cmd) {
     switch (cmd) {
         case APP_CMD_INIT_WINDOW:
             if (app->window != nullptr) {
+                engine->screenWidth = ANativeWindow_getWidth(app->window);
+                engine->screenHeight = ANativeWindow_getHeight(app->window);
                 engine->vulkan->init(app->window, app->activity->assetManager);
                 openCamera(engine);
                 startPreview(engine);
@@ -209,14 +335,27 @@ static void onAppCmd(struct android_app* app, int32_t cmd) {
 }
 
 static int32_t onInputEvent(struct android_app* app, AInputEvent* event) {
+    LOGI("onInputEvent: type=%d", AInputEvent_getType(event));
+    auto* engine = (AppEngine*)app->userData;
     if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION) {
         int32_t action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
         if (action == AMOTION_EVENT_ACTION_DOWN) {
             float x = AMotionEvent_getX(event, 0);
             float y = AMotionEvent_getY(event, 0);
-            LOGI("Touch detected at: %.2f, %.2f", x, y);
-            // Intersection logic with UI button will go here
-            return 1;
+            
+            // Convert to NDC (-1 to 1)
+            float ndcX = (x / (float)engine->screenWidth) * 2.0f - 1.0f;
+            float ndcY = (y / (float)engine->screenHeight) * 2.0f - 1.0f;
+            
+            LOGI("Touch (NDC): %.2f, %.2f", ndcX, ndcY);
+            
+            // Button is at center (0.0, 0.8) with radius ~0.15
+            float dx = ndcX - 0.0f;
+            float dy = ndcY - 0.8f;
+            if (dx*dx + dy*dy < 0.15f * 0.15f) {
+                takePicture(engine);
+                return 1;
+            }
         }
     }
     return 0;

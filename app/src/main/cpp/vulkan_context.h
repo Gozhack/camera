@@ -25,8 +25,10 @@ public:
     // Phase 3: Texture Rendering
     bool updateCameraTexture(AHardwareBuffer* buffer);
     void drawFrame();
+    void triggerFlash() { flashFrames.store(2); }
 
 private:
+    std::atomic<int> flashFrames{0};
     // Resource cache for AHardwareBuffers to avoid expensive re-imports
     struct BufferResource {
         VkImage image;
