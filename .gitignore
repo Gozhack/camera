@@ -1,4 +1,6 @@
 # Android Studio / IntelliJ
+# Local IDE files
+*.code-workspace
 .idea/
 *.iml
 *.iws
